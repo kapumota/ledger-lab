@@ -2,8 +2,8 @@ package money
 
 import (
 	"math"
-	"math/rand"
 	"testing"
+	"testing/quick"
 )
 
 func TestAddDetectaDesbordamiento(t *testing.T) {
@@ -32,87 +32,76 @@ func TestIsZeroSumConTransferenciaSimple(t *testing.T) {
 	}
 }
 
-// Propiedad. Para cualquier secuencia aleatoria de importes, anexar su opuesto
-// total produce siempre una secuencia balanceada. Es la formulacion minima de
-// I1 y la que usa el constructor de asientos.
-func TestPropiedadBalanceoPorContrapartida(t *testing.T) {
-	r := rand.New(rand.NewSource(1))
-	for iter := 0; iter < 2000; iter++ {
-		n := 1 + r.Intn(8)
-		xs := make([]Minor, 0, n+1)
+// Propiedad. testing/quick genera secuencias arbitrarias y, al anexar la
+// contrapartida exacta, la suma debe ser siempre cero. Los int32 mantienen la
+// suma intermedia lejos de los límites de int64 para aislar I1 del overflow.
+func TestPropertyCounterpartBalancesSequence(t *testing.T) {
+	property := func(raw [8]int32) bool {
+		xs := make([]Minor, 0, len(raw)+1)
 		var total Minor
-		desbordo := false
-		for i := 0; i < n; i++ {
-			// Rango acotado para que la contrapartida nunca desborde.
-			v := Minor(r.Int63n(1_000_000_000) - 500_000_000)
+		for _, value := range raw {
+			v := Minor(value)
 			if v == 0 {
 				v = 1
 			}
-			var err error
-			if total, err = Add(total, v); err != nil {
-				desbordo = true
-				break
-			}
 			xs = append(xs, v)
+			total += v
 		}
-		if desbordo {
-			continue
+		if total == 0 {
+			if xs[0] > 0 {
+				xs[0]++
+				total++
+			} else {
+				xs[0]--
+				total--
+			}
 		}
-		contra, err := Neg(total)
-		if err != nil {
-			continue
-		}
-		if contra == 0 {
-			continue
-		}
-		xs = append(xs, contra)
 
+		xs = append(xs, -total)
 		ok, err := IsZeroSum(xs)
-		if err != nil {
-			t.Fatalf("iter %d: error inesperado %v", iter, err)
-		}
-		if !ok {
-			t.Fatalf("iter %d: la secuencia con contrapartida no suma cero: %v", iter, xs)
-		}
+		return err == nil && ok
+	}
+
+	if err := quick.Check(property, &quick.Config{MaxCount: 2000}); err != nil {
+		t.Fatalf("la propiedad de contrapartida falló: %v", err)
 	}
 }
 
-// Propiedad central de Allocate. El reparto conserva el total exactamente.
-// Si esta propiedad falla, el ledger crea o destruye dinero al redondear.
-func TestPropiedadAllocateConservaElTotal(t *testing.T) {
-	r := rand.New(rand.NewSource(7))
-	for iter := 0; iter < 5000; iter++ {
-		total := Minor(r.Int63n(10_000_000))
-		n := 1 + r.Intn(6)
-		w := make([]int64, n)
-		todosCero := true
-		for i := range w {
-			w[i] = r.Int63n(100)
-			if w[i] != 0 {
-				todosCero = false
+// Propiedad central de Allocate. testing/quick varía el total y los pesos; el
+// reparto debe conservar exactamente el total y nunca crear partes negativas.
+func TestPropertyAllocatePreservesTotal(t *testing.T) {
+	property := func(rawTotal uint32, rawWeights [6]uint16) bool {
+		total := Minor(rawTotal)
+		weights := make([]int64, len(rawWeights))
+		hasPositiveWeight := false
+		for i, value := range rawWeights {
+			weights[i] = int64(value)
+			if weights[i] > 0 {
+				hasPositiveWeight = true
 			}
 		}
-		if todosCero {
-			w[0] = 1
+		if !hasPositiveWeight {
+			weights[0] = 1
 		}
 
-		partes, err := Allocate(total, w)
+		parts, err := Allocate(total, weights)
 		if err != nil {
-			t.Fatalf("iter %d: Allocate devolvio error %v", iter, err)
+			return false
 		}
-		suma, err := Sum(partes)
-		if err != nil {
-			t.Fatalf("iter %d: suma con error %v", iter, err)
+		sum, err := Sum(parts)
+		if err != nil || sum != total {
+			return false
 		}
-		if suma != total {
-			t.Fatalf("iter %d: Allocate(%d, %v) = %v suma %d, se esperaba %d",
-				iter, total, w, partes, suma, total)
-		}
-		for i, p := range partes {
-			if p < 0 {
-				t.Fatalf("iter %d: parte negativa en indice %d", iter, i)
+		for _, part := range parts {
+			if part < 0 {
+				return false
 			}
 		}
+		return true
+	}
+
+	if err := quick.Check(property, &quick.Config{MaxCount: 5000}); err != nil {
+		t.Fatalf("la propiedad de conservación de Allocate falló: %v", err)
 	}
 }
 

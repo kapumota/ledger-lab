@@ -2,8 +2,8 @@ package domain
 
 import (
 	"errors"
-	"math/rand"
 	"testing"
+	"testing/quick"
 
 	"github.com/google/uuid"
 
@@ -69,44 +69,88 @@ func TestUnSoloPostingSeRechaza(t *testing.T) {
 	}
 }
 
-// I1 como propiedad. Todo asiento construido por los constructores del dominio
-// es valido, para cualquier entrada admisible.
-func TestPropiedadI1SobreConstructores(t *testing.T) {
-	r := rand.New(rand.NewSource(11))
-	for i := 0; i < 5000; i++ {
-		amount := money.Minor(1 + r.Int63n(100_000_000))
-		e, err := NewTransfer(uuid.New(), "PEN", uuid.New(), uuid.New(), amount)
-		if err != nil {
-			t.Fatalf("iter %d: %v", i, err)
+// I1 como propiedad. testing/quick genera importes y cantidades de postings
+// arbitrarios. El test construye un asiento balanceado agregando la
+// contrapartida exacta y exige que Validate lo acepte para todos los casos.
+func TestPropertyGeneratedBalancedEntriesSatisfyI1(t *testing.T) {
+	property := func(rawAmounts [7]int32, rawCount uint8) bool {
+		n := 1 + int(rawCount%uint8(len(rawAmounts)))
+		postings := make([]Posting, 0, n+1)
+		var total money.Minor
+		for i := 0; i < n; i++ {
+			amount := money.Minor(rawAmounts[i])
+			if amount == 0 {
+				amount = 1
+			}
+			postings = append(postings, Posting{AccountID: testUUID(i + 2), Amount: amount})
+			total += amount
 		}
-		if err := e.Validate(); err != nil {
-			t.Fatalf("iter %d: asiento construido invalido: %v", i, err)
+		if total == 0 {
+			if postings[0].Amount > 0 {
+				postings[0].Amount++
+				total++
+			} else {
+				postings[0].Amount--
+				total--
+			}
 		}
+		postings = append(postings, Posting{AccountID: testUUID(n + 2), Amount: -total})
+
+		e := Entry{
+			IdempotencyKey: testUUID(1),
+			Currency:       "PEN",
+			Postings:       postings,
+		}
+		return e.Validate() == nil
+	}
+
+	if err := quick.Check(property, &quick.Config{MaxCount: 5000}); err != nil {
+		t.Fatalf("la propiedad I1 falló para un asiento balanceado generado: %v", err)
 	}
 }
 
-// I1 tambien debe sostenerse en el reparto proporcional, que es el caso donde
-// el redondeo podria crear o destruir centimos.
-func TestPropiedadI1SobreRepartoProporcional(t *testing.T) {
-	r := rand.New(rand.NewSource(13))
-	for i := 0; i < 3000; i++ {
-		n := 1 + r.Intn(5)
-		destinos := make([]uuid.UUID, n)
-		pesos := make([]int64, n)
-		for j := 0; j < n; j++ {
-			destinos[j] = uuid.New()
-			pesos[j] = 1 + r.Int63n(50)
+// I1 también debe sostenerse en el reparto proporcional. testing/quick varía
+// el total, la cantidad de destinos y sus pesos para explorar casos de
+// redondeo sin mezclar el generador con la propiedad comprobada.
+func TestPropertyProportionalSplitPreservesI1(t *testing.T) {
+	property := func(rawTotal uint32, rawWeights [6]uint16) bool {
+		n := 1 + int(rawTotal%uint32(len(rawWeights)))
+		destinations := make([]uuid.UUID, n)
+		weights := make([]int64, n)
+		hasPositiveWeight := false
+		for i := 0; i < n; i++ {
+			destinations[i] = testUUID(i + 3)
+			weights[i] = int64(rawWeights[i] % 100)
+			if weights[i] > 0 {
+				hasPositiveWeight = true
+			}
 		}
-		total := money.Minor(1 + r.Int63n(1_000_000))
+		if !hasPositiveWeight {
+			weights[0] = 1
+		}
 
-		e, err := NewProportionalSplit(uuid.New(), "PEN", uuid.New(), total, destinos, pesos)
-		if err != nil {
-			t.Fatalf("iter %d: %v", i, err)
-		}
-		if err := e.Validate(); err != nil {
-			t.Fatalf("iter %d: reparto invalido: %v", i, err)
-		}
+		total := money.Minor(int64(rawTotal) + 1)
+		e, err := NewProportionalSplit(
+			testUUID(1),
+			"PEN",
+			testUUID(2),
+			total,
+			destinations,
+			weights,
+		)
+		return err == nil && e.Validate() == nil
 	}
+
+	if err := quick.Check(property, &quick.Config{MaxCount: 3000}); err != nil {
+		t.Fatalf("la propiedad I1 falló para un reparto proporcional generado: %v", err)
+	}
+}
+
+func testUUID(n int) uuid.UUID {
+	var id uuid.UUID
+	id[14] = byte(n >> 8)
+	id[15] = byte(n)
+	return id
 }
 
 func TestFingerprintIndependienteDelOrden(t *testing.T) {

@@ -14,8 +14,9 @@
 
 #### Criterios de aceptacion
 
-**Fase A.** Property based testing sobre generación aleatoria de asientos para
-I1. I4 se comprueba en PostgreSQL mediante pruebas de integración que intentan
+**Fase A.** Property-based testing con `testing/quick` sobre generación
+automática de asientos balanceados, repartos proporcionales y conservación exacta
+de importes para I1. I4 se comprueba en PostgreSQL mediante pruebas de integración que intentan
 UPDATE y DELETE sobre `entries` y `postings` y exigen su rechazo.
 
 **Fase B.** Doscientas transferencias concurrentes sobre una cuenta caliente.

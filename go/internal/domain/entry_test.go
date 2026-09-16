@@ -132,6 +132,54 @@ func TestFingerprintIndependienteDelOrden(t *testing.T) {
 	}
 }
 
+func TestFingerprintIncludesMetadata(t *testing.T) {
+	key := uuid.New()
+	a, b := uuid.New(), uuid.New()
+	base := Entry{
+		IdempotencyKey: key,
+		Currency:       "PEN",
+		Postings: []Posting{
+			{AccountID: a, Amount: -100},
+			{AccountID: b, Amount: 100},
+		},
+		Metadata: []byte(`{"reference":"A-001"}`),
+	}
+	changed := base
+	changed.Metadata = []byte(`{"reference":"A-002"}`)
+
+	if string(base.Fingerprint()) == string(changed.Fingerprint()) {
+		t.Fatal("metadata distinta debe producir fingerprints distintos")
+	}
+}
+
+func TestFingerprintCanonicalizesMetadata(t *testing.T) {
+	key := uuid.New()
+	a, b := uuid.New(), uuid.New()
+	base := Entry{
+		IdempotencyKey: key,
+		Currency:       "PEN",
+		Postings: []Posting{
+			{AccountID: a, Amount: -100},
+			{AccountID: b, Amount: 100},
+		},
+		Metadata: []byte(`{"reference":"A-001","details":{"channel":"web","attempt":1}}`),
+	}
+	equivalent := base
+	equivalent.Metadata = []byte(` { "details" : { "attempt" : 1, "channel" : "web" }, "reference" : "A-001" } `)
+
+	if string(base.Fingerprint()) != string(equivalent.Fingerprint()) {
+		t.Fatal("metadata JSON equivalente debe producir el mismo fingerprint")
+	}
+
+	withoutMetadata := base
+	withoutMetadata.Metadata = nil
+	emptyMetadata := base
+	emptyMetadata.Metadata = []byte(`{}`)
+	if string(withoutMetadata.Fingerprint()) != string(emptyMetadata.Fingerprint()) {
+		t.Fatal("metadata omitida y objeto vacio deben producir el mismo fingerprint")
+	}
+}
+
 func TestNetByAccountAgregaCuentaRepetida(t *testing.T) {
 	a, b := uuid.New(), uuid.New()
 	e := Entry{IdempotencyKey: uuid.New(), Currency: "PEN", Postings: []Posting{

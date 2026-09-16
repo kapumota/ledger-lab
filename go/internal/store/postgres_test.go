@@ -234,6 +234,62 @@ func TestConflictoDeIdempotencia(t *testing.T) {
 	}
 }
 
+func TestIdempotencyConflictWhenMetadataChanges(t *testing.T) {
+	pool := nuevoPool(t)
+	st := store.New(pool, store.DefaultConfig())
+	ctx := context.Background()
+
+	capital := crearCuenta(t, pool, "capital", false)
+	a := crearCuenta(t, pool, "a", true)
+	b := crearCuenta(t, pool, "b", true)
+	fondear(t, st, capital, a, 1000_00)
+
+	key := uuid.New()
+	e1, _ := domain.NewTransfer(key, "PEN", a, b, 10_00)
+	e1.Metadata = []byte(`{"reference":"A-001"}`)
+	if _, err := st.PostEntry(ctx, e1); err != nil {
+		t.Fatal(err)
+	}
+
+	e2, _ := domain.NewTransfer(key, "PEN", a, b, 10_00)
+	e2.Metadata = []byte(`{"reference":"A-002"}`)
+	if _, err := st.PostEntry(ctx, e2); !errors.Is(err, store.ErrIdempotencyConflict) {
+		t.Fatalf("se esperaba ErrIdempotencyConflict por metadata distinta, se obtuvo %v", err)
+	}
+}
+
+func TestIdempotentRetryWithEquivalentMetadata(t *testing.T) {
+	pool := nuevoPool(t)
+	st := store.New(pool, store.DefaultConfig())
+	ctx := context.Background()
+
+	capital := crearCuenta(t, pool, "capital", false)
+	a := crearCuenta(t, pool, "a", true)
+	b := crearCuenta(t, pool, "b", true)
+	fondear(t, st, capital, a, 1000_00)
+
+	key := uuid.New()
+	e1, _ := domain.NewTransfer(key, "PEN", a, b, 10_00)
+	e1.Metadata = []byte(`{"reference":"A-001","channel":"web"}`)
+	first, err := st.PostEntry(ctx, e1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	e2, _ := domain.NewTransfer(key, "PEN", a, b, 10_00)
+	e2.Metadata = []byte(` { "channel" : "web", "reference" : "A-001" } `)
+	second, err := st.PostEntry(ctx, e2)
+	if err != nil {
+		t.Fatalf("metadata equivalente debe aceptarse como reintento: %v", err)
+	}
+	if !second.Duplicate {
+		t.Fatal("se esperaba Duplicate=true para metadata equivalente")
+	}
+	if second.EntryID != first.EntryID {
+		t.Fatalf("el reintento devolvio otro asiento: %s contra %s", second.EntryID, first.EntryID)
+	}
+}
+
 // Criterio de aceptacion de la Fase B. Doscientas transferencias concurrentes
 // sobre una cuenta caliente preservan I2 e I5 bajo la configuracion correcta.
 func TestConcurrenciaSobreCuentaCaliente(t *testing.T) {

@@ -13,11 +13,13 @@
 package domain
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"sort"
 
 	"github.com/google/uuid"
@@ -115,7 +117,34 @@ func (e Entry) Fingerprint() []byte {
 		binary.BigEndian.PutUint64(buf, uint64(it.amt))
 		h.Write(buf)
 	}
+	h.Write(canonicalMetadata(e.Metadata))
 	return h.Sum(nil)
+}
+
+// canonicalMetadata normaliza la representación JSON usada por el fingerprint.
+// El orden de las claves y el espacio en blanco no cambian la solicitud, pero
+// el contenido de metadata sí forma parte del comando idempotente.
+func canonicalMetadata(raw json.RawMessage) []byte {
+	if len(raw) == 0 {
+		return []byte("{}")
+	}
+
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var value any
+	if err := dec.Decode(&value); err != nil {
+		return raw
+	}
+	var extra any
+	if err := dec.Decode(&extra); err != io.EOF {
+		return raw
+	}
+
+	canonical, err := json.Marshal(value)
+	if err != nil {
+		return raw
+	}
+	return canonical
 }
 
 // Accounts devuelve las cuentas tocadas, ordenadas de forma determinista.

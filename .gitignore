@@ -1,0 +1,8 @@
+/experiments/raw/*.json
+/experiments/raw/*.csv
+/experiments/processed/*
+!/experiments/**/.gitkeep
+*.test
+/go/bin/
+/harness/bin/
+.env

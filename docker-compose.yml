@@ -1,0 +1,61 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: ledger
+    command:
+      - postgres
+      - -c
+      - max_connections=300
+      # log_lock_waits y deadlock_timeout bajos ayudan a observar el
+      # comportamiento del bloqueo durante las campanas de contencion.
+      - -c
+      - log_lock_waits=on
+      - -c
+      - deadlock_timeout=200ms
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d ledger"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  migrate:
+    image: postgres:16-alpine
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: postgres
+    volumes:
+      - ./schema:/schema:ro
+    entrypoint: >
+      sh -c "psql -h postgres -U postgres -d ledger -v ON_ERROR_STOP=1 -f /schema/migrations/0001_init.up.sql &&
+             psql -h postgres -U postgres -d ledger -v ON_ERROR_STOP=1 -f /schema/seeds/dev_accounts.sql"
+
+  ledgerd:
+    build:
+      context: .
+      dockerfile: go/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/ledger
+    command:
+      - -addr=:8080
+      - -strategy=ordered_locks
+      - -isolation=read_committed
+      - -max-conns=64
+    ports:
+      - "8080:8080"
+
+volumes:
+  pgdata:

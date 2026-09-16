@@ -1,0 +1,74 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: ledger
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=2s
+          --health-timeout=3s
+          --health-retries=30
+
+    env:
+      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/ledger
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: formato
+        run: |
+          test -z "$(gofmt -l go/cmd go/internal harness/cmd harness/internal)"
+
+      - name: aplicar esquema
+        run: |
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f schema/migrations/0001_init.up.sql
+
+      - name: vet y pruebas del brazo Go
+        working-directory: go
+        run: |
+          go mod tidy
+          go vet ./...
+          go test -race -count=1 ./...
+
+      - name: vet y compilacion del arnes
+        working-directory: harness
+        run: |
+          go mod tidy
+          go vet ./...
+          go build ./...
+
+      # El verificador debe salir limpio tras las pruebas de integracion.
+      - name: verificar invariantes
+        working-directory: harness
+        run: go run ./cmd/verifier -dsn "$DATABASE_URL"
+
+      # Y debe fallar cuando se inyecta una violacion. Un verificador que nunca
+      # reporta nada no es evidencia de correccion.
+      - name: falsacion del verificador
+        working-directory: harness
+        run: |
+          go run ./cmd/injector -dsn "$DATABASE_URL" -kind i5 -yes
+          if go run ./cmd/verifier -dsn "$DATABASE_URL"; then
+            echo "el verificador no detecto la violacion inyectada"
+            exit 1
+          fi
+          echo "el verificador detecto la violacion, como debe"

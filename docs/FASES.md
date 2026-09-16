@@ -14,9 +14,9 @@
 
 #### Criterios de aceptacion
 
-**Fase A.** Property based testing sobre generacion aleatoria de asientos. I1 e
-I4 se cumplen en el cien por ciento de los casos generados, incluido el reparto
-proporcional con residuo de redondeo.
+**Fase A.** Property based testing sobre generación aleatoria de asientos para
+I1. I4 se comprueba en PostgreSQL mediante pruebas de integración que intentan
+UPDATE y DELETE sobre `entries` y `postings` y exigen su rechazo.
 
 **Fase B.** Doscientas transferencias concurrentes sobre una cuenta caliente.
 I2, I5 e I6 se cumplen bajo la configuracion de referencia. La anomalia
@@ -27,8 +27,9 @@ observada bajo configuraciones incoherentes queda documentada en
 concurrente de la misma clave desde veinte goroutines.
 
 **Fase D.** El verificador detecta violaciones inyectadas artificialmente de I1,
-I4, I5 e I6. Sin esa prueba el arnes no es confiable y ninguna conclusion de
-campana tiene valor.
+I5 e I6. I4 no pertenece a esta falsación porque una fotografía final de la base
+no permite reconstruir una mutación histórica. Su evidencia corresponde a las
+pruebas de integración del esquema.
 
 **Fase E.** El brazo BEAM pasa la misma suite de contrato que el brazo Go, sin
 modificar el contrato ni el verificador.

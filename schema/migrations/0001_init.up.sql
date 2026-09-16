@@ -187,10 +187,9 @@ CREATE TRIGGER trg_posting_currency
 -- I4. Inmutabilidad. Ni entries ni postings admiten UPDATE o DELETE.
 -- Una correccion es un asiento de reverso, nunca una edicion.
 --
--- El trigger respeta session_replication_role = 'replica', lo que permite al
--- inyector de fallos del arnes producir violaciones deliberadas para demostrar
--- que el verificador las detecta. Fuera de ese uso, el rol de aplicacion no
--- debe tener permiso para cambiar session_replication_role.
+-- La evidencia de I4 se obtiene intentando UPDATE y DELETE contra ambas tablas.
+-- El verificador externo observa el estado final y no puede inferir una mutación
+-- histórica ya confirmada, por lo que I4 no se falsifica mediante el inyector.
 -- ---------------------------------------------------------------------------
 CREATE FUNCTION reject_mutation() RETURNS TRIGGER AS $$
 BEGIN

@@ -77,6 +77,70 @@ func fondear(t *testing.T, st *store.Store, capital, destino uuid.UUID, monto mo
 	}
 }
 
+func TestEntriesAndPostingsRejectUpdateAndDelete(t *testing.T) {
+	pool := nuevoPool(t)
+	st := store.New(pool, store.DefaultConfig())
+	ctx := context.Background()
+
+	capital := crearCuenta(t, pool, "capital_i4", false)
+	destino := crearCuenta(t, pool, "destino_i4", true)
+	entry, err := domain.NewTransfer(uuid.New(), "PEN", capital, destino, 10_00)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.PostEntry(ctx, entry); err != nil {
+		t.Fatalf("no se pudo crear el asiento para probar I4: %v", err)
+	}
+
+	var postingID int64
+	if err := pool.QueryRow(ctx,
+		`SELECT id FROM postings WHERE entry_id = $1 ORDER BY id LIMIT 1`, entry.ID).
+		Scan(&postingID); err != nil {
+		t.Fatalf("no se pudo localizar un posting del asiento: %v", err)
+	}
+
+	cases := []struct {
+		name  string
+		query string
+		arg   any
+	}{
+		{
+			name:  "update entry",
+			query: `UPDATE entries SET metadata = '{"mutated":true}'::jsonb WHERE id = $1`,
+			arg:   entry.ID,
+		},
+		{
+			name:  "delete entry",
+			query: `DELETE FROM entries WHERE id = $1`,
+			arg:   entry.ID,
+		},
+		{
+			name:  "update posting",
+			query: `UPDATE postings SET amount_minor = amount_minor + 1 WHERE id = $1`,
+			arg:   postingID,
+		},
+		{
+			name:  "delete posting",
+			query: `DELETE FROM postings WHERE id = $1`,
+			arg:   postingID,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := pool.Exec(ctx, tc.query, tc.arg)
+			if err == nil {
+				t.Fatal("se esperaba rechazo de una mutación sobre una tabla append-only")
+			}
+
+			var pgErr *pgconn.PgError
+			if !errors.As(err, &pgErr) || pgErr.Code != "23514" {
+				t.Fatalf("se esperaba check_violation 23514 para I4, se obtuvo %v", err)
+			}
+		})
+	}
+}
+
 func TestEntryWithoutPostingsIsRejectedAtCommit(t *testing.T) {
 	pool := nuevoPool(t)
 	ctx := context.Background()

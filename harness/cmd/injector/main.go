@@ -30,13 +30,13 @@ import (
 func main() {
 	var (
 		dsn  = flag.String("dsn", os.Getenv("DATABASE_URL"), "cadena de conexion")
-		kind = flag.String("kind", "", "invariante a violar: i1, i4, i5, i6")
+		kind = flag.String("kind", "", "invariante a violar: i1, i5, i6")
 		si   = flag.Bool("yes", false, "confirmar. El inyector corrompe datos a proposito")
 	)
 	flag.Parse()
 
 	if *dsn == "" || *kind == "" {
-		fmt.Fprintln(os.Stderr, "uso: injector -dsn=... -kind=i1|i4|i5|i6 -yes")
+		fmt.Fprintln(os.Stderr, "uso: injector -dsn=... -kind=i1|i5|i6 -yes")
 		os.Exit(2)
 	}
 	if !*si {
@@ -58,8 +58,6 @@ func main() {
 	switch *kind {
 	case "i1":
 		fn = inyectarI1
-	case "i4":
-		fn = inyectarI4
 	case "i5":
 		fn = inyectarI5
 	case "i6":
@@ -76,9 +74,8 @@ func main() {
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	// Desactiva los triggers de usuario, incluido el que defiende I1 y el que
-	// impide mutaciones. Sin esto la base rechazaria la inyeccion, que es
-	// precisamente lo que se quiere en produccion.
+	// Desactiva los triggers de usuario para poder introducir estados inválidos
+	// que el verificador externo sí puede observar en una fotografía final.
 	if _, err := tx.Exec(ctx, `SET LOCAL session_replication_role = 'replica'`); err != nil {
 		fmt.Fprintf(os.Stderr, "no se pudieron desactivar los triggers: %v\n", err)
 		os.Exit(2)
@@ -127,20 +124,10 @@ func inyectarI1(ctx context.Context, tx pgx.Tx) (string, error) {
 	return fmt.Sprintf("asiento %s suma -1000", entryID), nil
 }
 
-// inyectarI4 muta un asiento existente, lo que el ledger prohibe.
-func inyectarI4(ctx context.Context, tx pgx.Tx) (string, error) {
-	var id string
-	err := tx.QueryRow(ctx, `SELECT id::text FROM entries ORDER BY created_at LIMIT 1`).Scan(&id)
-	if err != nil {
-		return "", fmt.Errorf("se requiere al menos un asiento previo: %w", err)
-	}
-	if _, err := tx.Exec(ctx, `
-		UPDATE entries SET metadata = metadata || '{"injected":"i4"}'::jsonb WHERE id = $1::uuid`,
-		id); err != nil {
-		return "", err
-	}
-	return fmt.Sprintf("asiento %s mutado, lo que I4 prohibe", id), nil
-}
+// I4 no se inyecta aquí. El verificador observa el estado final de la base y
+// no puede inferir que una fila fue mutada anteriormente. La evidencia de I4
+// se obtiene con pruebas de integración que comprueban que PostgreSQL rechaza
+// UPDATE y DELETE sobre entries y postings.
 
 // inyectarI5 deja una cuenta restringida en negativo mediante un asiento
 // balanceado, de modo que I1 siga cumpliendose y solo falle I5.

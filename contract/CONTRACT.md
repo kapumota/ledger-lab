@@ -27,18 +27,31 @@ lleva la direccion, negativo es cargo y positivo es abono.
 
 #### Respuestas
 
+Una solicitud aceptada devuelve siempre el mismo contrato observable, tanto en
+la primera aplicación como en un reintento legítimo con la misma clave y el mismo
+cuerpo:
+
+```json
+{
+  "entry_id": "uuid",
+  "status": "committed"
+}
+```
+
 | Codigo | `code`                  | Significado |
 |--------|-------------------------|-------------|
-| 201    |                         | Asiento creado |
-| 200    |                         | Reintento legitimo de una solicitud ya aplicada |
+| 202    |                         | Solicitud aceptada, asiento en estado `committed` |
+| 400    | `malformed_body`        | JSON mal formado o campos no reconocidos |
 | 409    | `idempotency_conflict`  | Clave reutilizada con un cuerpo distinto |
 | 409    | `insufficient_funds`    | La operacion dejaria negativa una cuenta restringida |
 | 422    | `invalid_entry`         | No suma cero, menos de dos postings o importe cero |
 | 422    | `unknown_account`       | Alguna cuenta no existe |
 | 503    | `retries_exhausted`     | Conflicto de serializacion persistente |
 
-La distincion entre 201 y 200 es informativa. El contrato exige que el efecto
-final sea identico, no que el codigo lo sea.
+I3 exige respuestas equivalentes para la misma `idempotency_key` y el mismo
+cuerpo. Por eso la respuesta HTTP no expone si el efecto se creó en esta llamada,
+cuántos reintentos internos ocurrieron ni la latencia de la operación. Esos datos
+permanecen disponibles mediante las métricas del runtime.
 
 #### Consultas
 
@@ -54,7 +67,7 @@ GET /healthz                 ->  { "status": "ok" }
 |----|-----------|
 | I1 | Todo asiento suma cero por moneda y tiene al menos dos postings |
 | I2 | Para transferencias internas, la suma de saldos del sistema es constante |
-| I3 | Dos solicitudes con la misma clave producen exactamente un asiento |
+| I3 | Misma clave y mismo cuerpo producen exactamente un asiento y respuestas equivalentes |
 | I4 | Ningun asiento se modifica ni se elimina. Una correccion es un reverso |
 | I5 | Las cuentas restringidas nunca presentan saldo negativo committed |
 | I6 | La proyeccion de saldo coincide con el recomputo desde postings |

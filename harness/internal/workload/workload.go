@@ -102,12 +102,14 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 			for ctx.Err() == nil {
 				origen, destino := elegirPar(r, cfg)
 				key := nuevaClave(r)
-				enviar(ctx, cliente, cfg, c, key, origen, destino)
+				enviar(ctx, cliente, cfg, c, key, origen, destino, false)
 
-				// Duplicacion deliberada. El reintento con la misma clave debe
-				// producir el mismo efecto una sola vez (I3).
+				// Duplicación deliberada. El reintento con la misma clave debe
+				// producir el mismo efecto una sola vez (I3). El contrato HTTP no
+				// revela si la solicitud es duplicada, así que el arnés conserva
+				// esa información porque él mismo generó el reintento.
 				if cfg.DuplicatePct > 0 && r.Intn(100) < cfg.DuplicatePct {
-					enviar(ctx, cliente, cfg, c, key, origen, destino)
+					enviar(ctx, cliente, cfg, c, key, origen, destino, true)
 				}
 			}
 		}(w)
@@ -148,7 +150,7 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 }
 
 func enviar(ctx context.Context, cliente *http.Client, cfg Config, c *contadores,
-	key, origen, destino string) {
+	key, origen, destino string, duplicate bool) {
 
 	cuerpo, _ := json.Marshal(map[string]any{
 		"idempotency_key": key,
@@ -194,10 +196,12 @@ func enviar(ctx context.Context, cliente *http.Client, cfg Config, c *contadores
 	c.latencias = append(c.latencias, elapsed)
 
 	switch resp.StatusCode {
-	case http.StatusCreated:
-		c.created++
-	case http.StatusOK:
-		c.dup++
+	case http.StatusAccepted:
+		if duplicate {
+			c.dup++
+		} else {
+			c.created++
+		}
 	case http.StatusConflict:
 		if cuerpoResp.Code == "idempotency_conflict" {
 			c.conflicts++

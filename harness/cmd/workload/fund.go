@@ -34,7 +34,7 @@ func fondearTodas(baseURL, moneda, fondeador string, cuentas []string, monto int
 			return fmt.Errorf("cuenta %d: %w", i, err)
 		}
 		_ = resp.Body.Close()
-		if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
+		if resp.StatusCode != http.StatusAccepted {
 			return fmt.Errorf("cuenta %d: el fondeo devolvio %d", i, resp.StatusCode)
 		}
 	}

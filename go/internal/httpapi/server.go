@@ -35,10 +35,8 @@ type PostEntryRequest struct {
 
 // PostEntryResponse es la respuesta del comando.
 type PostEntryResponse struct {
-	EntryID   string `json:"entry_id"`
-	Duplicate bool   `json:"duplicate"`
-	Retries   int    `json:"retries"`
-	ElapsedMs int64  `json:"elapsed_ms"`
+	EntryID string `json:"entry_id"`
+	Status  string `json:"status"`
 }
 
 // ErrorResponse es el cuerpo de error. El campo code es estable y forma parte
@@ -87,18 +85,12 @@ func (s *Server) postEntry(w http.ResponseWriter, r *http.Request) {
 	res, err := s.st.PostEntry(r.Context(), e)
 	switch {
 	case err == nil:
-		code := http.StatusCreated
-		if res.Duplicate {
-			// Un reintento legitimo devuelve 200 y no 201. El efecto ya
-			// ocurrio, no se creo nada nuevo. I3 exige que el llamador no
-			// pueda distinguir el resultado final, no el codigo.
-			code = http.StatusOK
-		}
-		writeJSON(w, code, PostEntryResponse{
-			EntryID:   res.EntryID.String(),
-			Duplicate: res.Duplicate,
-			Retries:   res.Retries,
-			ElapsedMs: res.Elapsed.Milliseconds(),
+		// La primera aplicación y un reintento legítimo comparten exactamente
+		// el mismo contrato observable. La distinción permanece solo en las
+		// métricas internas del Store.
+		writeJSON(w, http.StatusAccepted, PostEntryResponse{
+			EntryID: res.EntryID.String(),
+			Status:  "committed",
 		})
 	case errors.Is(err, store.ErrIdempotencyConflict):
 		writeError(w, http.StatusConflict, "idempotency_conflict", err.Error())

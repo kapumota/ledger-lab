@@ -44,7 +44,7 @@ cuerpo:
 | 400    | `malformed_body`        | JSON mal formado o campos no reconocidos |
 | 409    | `idempotency_conflict`  | Clave reutilizada con un cuerpo distinto |
 | 409    | `insufficient_funds`    | La operacion dejaria negativa una cuenta restringida |
-| 422    | `invalid_entry`         | No suma cero, menos de dos postings o importe cero |
+| 422    | `invalid_entry`         | No suma cero, menos de dos postings, importe cero o moneda incompatible |
 | 422    | `unknown_account`       | Alguna cuenta no existe |
 | 503    | `retries_exhausted`     | Conflicto de serializacion persistente |
 

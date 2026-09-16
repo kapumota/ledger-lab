@@ -82,6 +82,33 @@ func TestPostEntryRejectsMalformedBody(t *testing.T) {
 	}
 }
 
+func TestPostEntryRejectsTrailingJSON(t *testing.T) {
+	baseURL := strings.TrimRight(os.Getenv("LEDGER_BASE_URL"), "/")
+	if baseURL == "" {
+		t.Skip("LEDGER_BASE_URL no definida, se omite la prueba de contrato HTTP")
+	}
+
+	req, err := http.NewRequest(http.MethodPost, baseURL+"/entries", strings.NewReader(`{} {}`))
+	if err != nil {
+		t.Fatalf("no se pudo crear la solicitud HTTP: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("falló la solicitud HTTP: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var body errorResponse
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("no se pudo decodificar el error: %v", err)
+	}
+	if resp.StatusCode != http.StatusBadRequest || body.Code != "malformed_body" {
+		t.Fatalf("se esperaba HTTP 400 malformed_body para JSON concatenado, se obtuvo %d %q", resp.StatusCode, body.Code)
+	}
+}
+
 func TestPostEntryMapsContractErrors(t *testing.T) {
 	t.Run("idempotency_conflict", func(t *testing.T) {
 		env := newTestEnvironment(t)
@@ -127,6 +154,19 @@ func TestPostEntryMapsContractErrors(t *testing.T) {
 		assertContractError(t, postEntry(t, env.baseURL, body), http.StatusUnprocessableEntity, "invalid_entry")
 	})
 
+	t.Run("currency_mismatch", func(t *testing.T) {
+		env := newTestEnvironment(t)
+		body := map[string]any{
+			"idempotency_key": newUUID(t),
+			"currency":        "PEN",
+			"postings": []map[string]any{
+				{"account_id": env.funderID, "amount_minor": -100},
+				{"account_id": env.usdAccountID, "amount_minor": 100},
+			},
+		}
+		assertContractError(t, postEntry(t, env.baseURL, body), http.StatusUnprocessableEntity, "invalid_entry")
+	})
+
 	t.Run("insufficient_funds", func(t *testing.T) {
 		env := newTestEnvironment(t)
 		body := map[string]any{
@@ -142,9 +182,10 @@ func TestPostEntryMapsContractErrors(t *testing.T) {
 }
 
 type testEnvironment struct {
-	baseURL   string
-	funderID  string
-	accountID string
+	baseURL      string
+	funderID     string
+	accountID    string
+	usdAccountID string
 }
 
 func newTestEnvironment(t *testing.T) testEnvironment {
@@ -164,20 +205,29 @@ func newTestEnvironment(t *testing.T) testEnvironment {
 
 	funderID := newUUID(t)
 	accountID := newUUID(t)
+	usdAccountID := newUUID(t)
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO accounts (id, name, currency, kind, constrained)
 		VALUES ($1, $2, 'PEN', 'equity', FALSE),
-		       ($3, $4, 'PEN', 'liability', TRUE)`,
-		funderID, "funder_http_"+funderID, accountID, "account_http_"+accountID); err != nil {
+		       ($3, $4, 'PEN', 'liability', TRUE),
+		       ($5, $6, 'USD', 'liability', TRUE)`,
+		funderID, "funder_http_"+funderID,
+		accountID, "account_http_"+accountID,
+		usdAccountID, "account_usd_http_"+usdAccountID); err != nil {
 		t.Fatalf("no se pudieron crear las cuentas de prueba: %v", err)
 	}
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO balances (account_id, amount_minor)
-		VALUES ($1, 0), ($2, 0)`, funderID, accountID); err != nil {
+		VALUES ($1, 0), ($2, 0), ($3, 0)`, funderID, accountID, usdAccountID); err != nil {
 		t.Fatalf("no se pudieron crear los saldos de prueba: %v", err)
 	}
 
-	return testEnvironment{baseURL: baseURL, funderID: funderID, accountID: accountID}
+	return testEnvironment{
+		baseURL:      baseURL,
+		funderID:     funderID,
+		accountID:    accountID,
+		usdAccountID: usdAccountID,
+	}
 }
 
 type httpResult struct {

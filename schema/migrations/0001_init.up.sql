@@ -172,7 +172,8 @@ BEGIN
     IF v_entry_currency <> v_account_currency THEN
         RAISE EXCEPTION 'Moneda incoherente. Asiento % en % contra cuenta % en %',
             NEW.entry_id, v_entry_currency, NEW.account_id, v_account_currency
-            USING ERRCODE = 'check_violation';
+            USING ERRCODE = 'check_violation',
+                  CONSTRAINT = 'postings_currency_matches_entry_ck';
     END IF;
 
     RETURN NEW;

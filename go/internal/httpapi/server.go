@@ -9,6 +9,7 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"time"
 
@@ -75,6 +76,14 @@ func (s *Server) postEntry(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "malformed_body", err.Error())
 		return
 	}
+	var trailing any
+	if err := dec.Decode(&trailing); !errors.Is(err, io.EOF) {
+		if err == nil {
+			err = errors.New("el cuerpo contiene más de un valor JSON")
+		}
+		writeError(w, http.StatusBadRequest, "malformed_body", err.Error())
+		return
+	}
 
 	e, err := aDominio(req)
 	if err != nil {
@@ -98,6 +107,8 @@ func (s *Server) postEntry(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "insufficient_funds", err.Error())
 	case errors.Is(err, store.ErrAccountNotFound):
 		writeError(w, http.StatusUnprocessableEntity, "unknown_account", err.Error())
+	case errors.Is(err, store.ErrCurrencyMismatch):
+		writeError(w, http.StatusUnprocessableEntity, "invalid_entry", err.Error())
 	case errors.Is(err, store.ErrRetriesExhausted):
 		writeError(w, http.StatusServiceUnavailable, "retries_exhausted", err.Error())
 	case errors.Is(err, domain.ErrUnbalanced),

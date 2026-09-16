@@ -33,6 +33,8 @@ var (
 	ErrInsufficientFunds = errors.New("store: saldo insuficiente en cuenta restringida")
 	// ErrAccountNotFound indica una cuenta inexistente.
 	ErrAccountNotFound = errors.New("store: cuenta inexistente")
+	// ErrCurrencyMismatch indica que una cuenta pertenece a otra moneda.
+	ErrCurrencyMismatch = errors.New("store: moneda de cuenta incompatible con el asiento")
 	// ErrRetriesExhausted indica que se agotaron los reintentos por conflicto
 	// de serializacion.
 	ErrRetriesExhausted = errors.New("store: reintentos agotados por conflicto de serializacion")
@@ -277,6 +279,9 @@ func (s *Store) intentar(ctx context.Context, e domain.Entry) (Result, error) {
 			if isMissingPostingAccount(err) {
 				return Result{}, fmt.Errorf("%w: %s", ErrAccountNotFound, posting.AccountID)
 			}
+			if isPostingCurrencyMismatch(err) {
+				return Result{}, fmt.Errorf("%w: %s", ErrCurrencyMismatch, posting.AccountID)
+			}
 			return Result{}, err
 		}
 	}
@@ -417,6 +422,15 @@ func isMissingPostingAccount(err error) bool {
 	return errors.As(err, &pgErr) &&
 		pgErr.Code == "23503" &&
 		pgErr.ConstraintName == "postings_account_id_fkey"
+}
+
+// isPostingCurrencyMismatch reconoce exclusivamente la violación emitida por
+// el trigger que impide mezclar la moneda del asiento con la de una cuenta.
+func isPostingCurrencyMismatch(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) &&
+		pgErr.Code == "23514" &&
+		pgErr.ConstraintName == "postings_currency_matches_entry_ck"
 }
 
 // esConflictoDeSerializacion reconoce los codigos que PostgreSQL usa para

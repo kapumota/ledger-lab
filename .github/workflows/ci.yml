@@ -42,18 +42,24 @@ jobs:
         run: |
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f schema/migrations/0001_init.up.sql
 
-      - name: vet y pruebas del brazo Go
+      - name: validar módulos Go
+        run: |
+          (cd go && go mod tidy)
+          (cd harness && go mod tidy)
+          git diff --exit-code -- go/go.mod go/go.sum harness/go.mod harness/go.sum
+
+      - name: vet, pruebas y compilación del brazo Go
         working-directory: go
         run: |
-          go mod tidy
           go vet ./...
           go test -race -count=1 ./...
+          go build ./...
 
-      - name: vet y compilacion del arnes
+      - name: vet, pruebas y compilación del arnés
         working-directory: harness
         run: |
-          go mod tidy
           go vet ./...
+          go test -race -count=1 ./...
           go build ./...
 
       # El verificador debe salir limpio tras las pruebas de integracion.

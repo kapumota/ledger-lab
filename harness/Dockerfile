@@ -1,7 +1,7 @@
 FROM golang:1.22-alpine AS build
 WORKDIR /src
-COPY harness/go.mod ./
-RUN go mod download && go mod tidy
+COPY harness/go.mod harness/go.sum ./
+RUN go mod download
 COPY harness/ ./
 RUN CGO_ENABLED=0 go build -trimpath -o /out/verifier ./cmd/verifier && \
     CGO_ENABLED=0 go build -trimpath -o /out/workload ./cmd/workload && \

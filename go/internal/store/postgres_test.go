@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/kapumota/ledger-lab/go/internal/domain"
@@ -73,6 +74,34 @@ func fondear(t *testing.T, st *store.Store, capital, destino uuid.UUID, monto mo
 	}
 	if _, err := st.PostEntry(context.Background(), e); err != nil {
 		t.Fatalf("no se pudo fondear: %v", err)
+	}
+}
+
+func TestEntryWithoutPostingsIsRejectedAtCommit(t *testing.T) {
+	pool := nuevoPool(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	_, err = tx.Exec(ctx, `
+		INSERT INTO entries (id, idempotency_key, request_fingerprint, currency)
+		VALUES ($1, $2, $3, 'PEN')`, uuid.New(), uuid.New(), []byte{1})
+	if err != nil {
+		t.Fatalf("la inserción debe llegar hasta el commit diferido: %v", err)
+	}
+
+	err = tx.Commit(ctx)
+	if err == nil {
+		t.Fatal("se esperaba rechazo al confirmar un asiento sin postings")
+	}
+
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "23514" {
+		t.Fatalf("se esperaba check_violation 23514, se obtuvo %v", err)
 	}
 }
 

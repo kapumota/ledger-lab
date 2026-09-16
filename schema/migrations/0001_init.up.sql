@@ -130,6 +130,32 @@ CREATE CONSTRAINT TRIGGER trg_entry_balanced
     DEFERRABLE INITIALLY DEFERRED
     FOR EACH ROW EXECUTE FUNCTION assert_entry_balanced();
 
+-- Un trigger sobre postings no se ejecuta cuando un asiento no tiene ninguna
+-- línea. Esta comprobación diferida sobre entries cierra ese hueco al commit.
+CREATE FUNCTION assert_entry_has_minimum_postings() RETURNS TRIGGER AS $$
+DECLARE
+    v_count INT;
+BEGIN
+    SELECT COUNT(*)
+      INTO v_count
+      FROM postings
+     WHERE entry_id = NEW.id;
+
+    IF v_count < 2 THEN
+        RAISE EXCEPTION 'I1 violada. El asiento % tiene % postings, se requieren al menos dos',
+            NEW.id, v_count
+            USING ERRCODE = 'check_violation';
+    END IF;
+
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE CONSTRAINT TRIGGER trg_entry_has_minimum_postings
+    AFTER INSERT ON entries
+    DEFERRABLE INITIALLY DEFERRED
+    FOR EACH ROW EXECUTE FUNCTION assert_entry_has_minimum_postings();
+
 -- ---------------------------------------------------------------------------
 -- Coherencia de moneda. Un posting solo puede tocar una cuenta de la misma
 -- moneda que su asiento. El cambio de divisa se modela con cuatro postings y

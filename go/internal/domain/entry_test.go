@@ -48,6 +48,16 @@ func TestPostingCeroSeRechaza(t *testing.T) {
 	}
 }
 
+func TestEntryWithoutPostingsIsRejected(t *testing.T) {
+	e := Entry{
+		IdempotencyKey: uuid.New(),
+		Currency:       "PEN",
+	}
+	if err := e.Validate(); !errors.Is(err, ErrTooFewPostings) {
+		t.Fatalf("se esperaba ErrTooFewPostings, se obtuvo %v", err)
+	}
+}
+
 func TestUnSoloPostingSeRechaza(t *testing.T) {
 	e := Entry{
 		IdempotencyKey: uuid.New(),

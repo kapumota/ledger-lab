@@ -201,6 +201,69 @@ func TestTransferenciaAtomica(t *testing.T) {
 	}
 }
 
+func TestPostEntryMissingAccountReturnsUniformError(t *testing.T) {
+	pool := nuevoPool(t)
+	ctx := context.Background()
+
+	strategies := []struct {
+		name      string
+		strategy  store.Strategy
+		isolation pgx.TxIsoLevel
+	}{
+		{name: "ordered_locks", strategy: store.StrategyOrderedLocks, isolation: pgx.ReadCommitted},
+		{name: "optimistic", strategy: store.StrategyOptimistic, isolation: pgx.Serializable},
+		{name: "weak", strategy: store.StrategyWeak, isolation: pgx.ReadCommitted},
+	}
+
+	for _, strategy := range strategies {
+		t.Run(strategy.name, func(t *testing.T) {
+			cfg := store.DefaultConfig()
+			cfg.Strategy = strategy.strategy
+			cfg.Isolation = strategy.isolation
+			st := store.New(pool, cfg)
+
+			existing := crearCuenta(t, pool, "existing", false)
+			missing := uuid.New()
+
+			cases := []struct {
+				name string
+				from uuid.UUID
+				to   uuid.UUID
+			}{
+				{name: "missing debit account", from: missing, to: existing},
+				{name: "missing credit account", from: existing, to: missing},
+			}
+
+			for _, tc := range cases {
+				t.Run(tc.name, func(t *testing.T) {
+					entry, err := domain.NewTransfer(uuid.New(), "PEN", tc.from, tc.to, 1_00)
+					if err != nil {
+						t.Fatal(err)
+					}
+					_, err = st.PostEntry(ctx, entry)
+					if !errors.Is(err, store.ErrAccountNotFound) {
+						t.Fatalf("se esperaba ErrAccountNotFound, se obtuvo %v", err)
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestMissingAccountBalanceQueriesReturnUniformError(t *testing.T) {
+	pool := nuevoPool(t)
+	st := store.New(pool, store.DefaultConfig())
+	ctx := context.Background()
+	missing := uuid.New()
+
+	if _, err := st.Balance(ctx, missing); !errors.Is(err, store.ErrAccountNotFound) {
+		t.Fatalf("Balance debe devolver ErrAccountNotFound, se obtuvo %v", err)
+	}
+	if _, err := st.RecomputedBalance(ctx, missing); !errors.Is(err, store.ErrAccountNotFound) {
+		t.Fatalf("RecomputedBalance debe devolver ErrAccountNotFound, se obtuvo %v", err)
+	}
+}
+
 func TestSaldoInsuficienteRechazado(t *testing.T) {
 	pool := nuevoPool(t)
 	st := store.New(pool, store.DefaultConfig())

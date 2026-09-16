@@ -271,9 +271,12 @@ func (s *Store) intentar(ctx context.Context, e domain.Entry) (Result, error) {
 			VALUES ($1, $2, $3)`, e.ID, p.AccountID, int64(p.Amount))
 	}
 	br := tx.SendBatch(ctx, batch)
-	for range e.Postings {
+	for _, posting := range e.Postings {
 		if _, err := br.Exec(); err != nil {
 			_ = br.Close()
+			if isMissingPostingAccount(err) {
+				return Result{}, fmt.Errorf("%w: %s", ErrAccountNotFound, posting.AccountID)
+			}
 			return Result{}, err
 		}
 	}
@@ -387,8 +390,15 @@ func (s *Store) Balance(ctx context.Context, acc uuid.UUID) (money.Minor, error)
 // debe usarse en la ruta de escritura.
 func (s *Store) RecomputedBalance(ctx context.Context, acc uuid.UUID) (money.Minor, error) {
 	var v int64
-	err := s.pool.QueryRow(ctx,
-		`SELECT COALESCE(SUM(amount_minor), 0) FROM postings WHERE account_id = $1`, acc).Scan(&v)
+	err := s.pool.QueryRow(ctx, `
+		SELECT COALESCE(SUM(p.amount_minor), 0)
+		  FROM accounts a
+		  LEFT JOIN postings p ON p.account_id = a.id
+		 WHERE a.id = $1
+		 GROUP BY a.id`, acc).Scan(&v)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, fmt.Errorf("%w: %s", ErrAccountNotFound, acc)
+	}
 	return money.Minor(v), err
 }
 
@@ -397,6 +407,16 @@ func metadataOrNil(e domain.Entry) any {
 		return nil
 	}
 	return string(e.Metadata)
+}
+
+// isMissingPostingAccount reconoce exclusivamente la violación de clave
+// foránea que indica que el account_id del posting no existe. No traduce
+// otras violaciones de integridad para evitar ocultar errores distintos.
+func isMissingPostingAccount(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) &&
+		pgErr.Code == "23503" &&
+		pgErr.ConstraintName == "postings_account_id_fkey"
 }
 
 // esConflictoDeSerializacion reconoce los codigos que PostgreSQL usa para

@@ -38,15 +38,21 @@ jobs:
         run: |
           test -z "$(gofmt -l go/cmd go/internal harness/cmd harness/internal)"
 
-      - name: aplicar esquema
+      - name: aplicar esquema y semillas
         run: |
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f schema/migrations/0001_init.up.sql
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f schema/seeds/dev_accounts.sql
 
       - name: validar módulos Go
         run: |
           (cd go && go mod tidy)
           (cd harness && go mod tidy)
           git diff --exit-code -- go/go.mod go/go.sum harness/go.mod harness/go.sum
+
+      - name: neutralidad arquitectónica y fixtures canónicos
+        working-directory: harness
+        run: |
+          go test -race -count=1 ./internal/architecture ./internal/history ./internal/verify
 
       - name: vet, pruebas y compilación del brazo Go
         working-directory: go
@@ -84,10 +90,25 @@ jobs:
             LEDGER_BASE_URL=http://127.0.0.1:8080 \
             go test -race -count=1 ./internal/contract)
 
-      # El verificador debe salir limpio tras las pruebas de integracion.
-      - name: verificar invariantes
+          rm -f /tmp/ledger-history.ndjson
+          (cd harness && go run ./cmd/workload \
+            -base-url http://127.0.0.1:8080 \
+            -dsn "$DATABASE_URL" \
+            -profile uniform \
+            -concurrency 2 \
+            -duration 1s \
+            -amount 100 \
+            -duplicate-pct 50 \
+            -seed 17 \
+            -fund 100000 \
+            -run-id ci-neutral-history \
+            -out-history /tmp/ledger-history.ndjson)
+          test -s /tmp/ledger-history.ndjson
+
+      # El verificador contrasta invariantes persistidos e historia observada.
+      - name: verificar invariantes e historia neutral
         working-directory: harness
-        run: go run ./cmd/verifier -dsn "$DATABASE_URL"
+        run: go run ./cmd/verifier -dsn "$DATABASE_URL" -history /tmp/ledger-history.ndjson
 
       # Y debe fallar cuando se inyecta una violacion. Un verificador que nunca
       # reporta nada no es evidencia de correccion.

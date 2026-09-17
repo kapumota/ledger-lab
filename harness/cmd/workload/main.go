@@ -1,5 +1,5 @@
 // Comando workload. Genera carga contra el contrato y escribe resultados
-// reproducibles en CSV y JSON.
+// reproducibles en CSV, JSON e historia NDJSON.
 package main
 
 import (
@@ -14,30 +14,48 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/kapumota/ledger-lab/harness/internal/history"
 	"github.com/kapumota/ledger-lab/harness/internal/workload"
 )
 
 func main() {
 	var (
-		base         = flag.String("base-url", "http://localhost:8080", "URL base del servicio bajo prueba")
-		dsn          = flag.String("dsn", os.Getenv("DATABASE_URL"), "cadena de conexion, para leer las cuentas")
-		perfil       = flag.String("profile", "uniform", "uniform, hot1, hot10, fan_in, fan_out")
-		concurrencia = flag.Int("concurrency", 50, "clientes simultaneos")
-		duracion     = flag.Duration("duration", 30*time.Second, "duracion de la campana")
-		monto        = flag.Int64("amount", 100, "importe de cada transferencia en unidades minimas")
-		duplicados   = flag.Int("duplicate-pct", 0, "porcentaje de solicitudes reenviadas con la misma clave")
-		semilla      = flag.Int64("seed", 1, "semilla del generador")
-		moneda       = flag.String("currency", "PEN", "moneda de la campana")
-		fondeo       = flag.Int64("fund", 0, "si es mayor que cero, fondea cada cuenta con este importe antes de medir")
-		salidaJSON   = flag.String("out-json", "", "ruta del resumen JSON")
-		salidaCSV    = flag.String("out-csv", "", "ruta del CSV de latencias crudas en microsegundos")
-		etiqueta     = flag.String("label", "", "etiqueta libre de la corrida, por ejemplo go_serializable")
+		base           = flag.String("base-url", "http://localhost:8080", "URL base del servicio bajo prueba")
+		dsn            = flag.String("dsn", os.Getenv("DATABASE_URL"), "cadena de conexion, para leer las cuentas")
+		perfil         = flag.String("profile", "uniform", "uniform, hot1, hot10, fan_in, fan_out")
+		concurrencia   = flag.Int("concurrency", 50, "clientes simultaneos")
+		duracion       = flag.Duration("duration", 30*time.Second, "duracion de la campana")
+		monto          = flag.Int64("amount", 100, "importe de cada transferencia en unidades minimas")
+		duplicados     = flag.Int("duplicate-pct", 0, "porcentaje de solicitudes reenviadas con la misma clave")
+		semilla        = flag.Int64("seed", 1, "semilla del generador")
+		moneda         = flag.String("currency", "PEN", "moneda de la campana")
+		fondeo         = flag.Int64("fund", 0, "si es mayor que cero, fondea cada cuenta con este importe antes de medir")
+		salidaJSON     = flag.String("out-json", "", "ruta del resumen JSON")
+		salidaCSV      = flag.String("out-csv", "", "ruta del CSV de latencias crudas en microsegundos")
+		salidaHistoria = flag.String("out-history", "", "ruta de history.ndjson")
+		runID          = flag.String("run-id", "", "identificador estable de la corrida")
+		etiqueta       = flag.String("label", "", "etiqueta libre de la corrida, por ejemplo go_serializable")
 	)
 	flag.Parse()
 
 	if *dsn == "" {
 		fmt.Fprintln(os.Stderr, "se requiere -dsn o DATABASE_URL")
 		os.Exit(2)
+	}
+	if *salidaHistoria != "" && *runID == "" {
+		fmt.Fprintln(os.Stderr, "se requiere -run-id cuando se usa -out-history")
+		os.Exit(2)
+	}
+
+	var historySink history.Sink
+	if *salidaHistoria != "" {
+		f, err := os.Create(*salidaHistoria)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "no se pudo crear la historia: %v\n", err)
+			os.Exit(2)
+		}
+		defer f.Close()
+		historySink = history.NewNDJSONWriter(f)
 	}
 
 	ctx := context.Background()
@@ -74,6 +92,8 @@ func main() {
 		Amount:       *monto,
 		DuplicatePct: *duplicados,
 		Seed:         *semilla,
+		RunID:        *runID,
+		History:      historySink,
 	}
 
 	res, err := workload.Run(ctx, cfg)

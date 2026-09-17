@@ -20,9 +20,10 @@ import (
 
 func main() {
 	var (
-		dsn    = flag.String("dsn", os.Getenv("DATABASE_URL"), "cadena de conexion")
-		salida = flag.String("json", "", "ruta del informe JSON, vacio para no escribirlo")
-		quiet  = flag.Bool("quiet", false, "solo imprimir violaciones")
+		dsn      = flag.String("dsn", os.Getenv("DATABASE_URL"), "cadena de conexion")
+		historia = flag.String("history", "", "ruta de history.ndjson para contraste opcional")
+		salida   = flag.String("json", "", "ruta del informe JSON, vacio para no escribirlo")
+		quiet    = flag.Bool("quiet", false, "solo imprimir violaciones")
 	)
 	flag.Parse()
 
@@ -45,6 +46,22 @@ func main() {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "verificacion: %v\n", err)
 		os.Exit(2)
+	}
+
+	if *historia != "" {
+		f, err := os.Open(*historia)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "historia: %v\n", err)
+			os.Exit(2)
+		}
+		check, violations, err := verify.CheckHistory(ctx, pool, f)
+		_ = f.Close()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "historia: %v\n", err)
+			os.Exit(2)
+		}
+		rep.Checks = append(rep.Checks, check)
+		rep.Violations = append(rep.Violations, violations...)
 	}
 
 	if !*quiet {

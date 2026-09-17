@@ -1,0 +1,92 @@
+{
+  "fixture_version": 1,
+  "cases": [
+    {
+      "name": "canonical",
+      "request": {
+        "idempotency_key": "7EA4803D-1BB1-4AD4-B923-70BB8A85AF43",
+        "currency": " pen ",
+        "postings": [
+          {
+            "account_id": "51392d41-edc2-4a4f-8656-0ed36220a874",
+            "amount_minor": 10050
+          },
+          {
+            "account_id": "1ff73504-e5de-49fb-882a-7fc09f6e06ce",
+            "amount_minor": -10050
+          }
+        ],
+        "metadata": {
+          "b": "dos",
+          "a": {
+            "y": true,
+            "x": [
+              "c",
+              2,
+              1
+            ]
+          }
+        }
+      },
+      "expected_fingerprint": "sha256:aa0290efee0bd963b1fa1f26ec112a8301b1da6660736e9321834c1188e22acf"
+    },
+    {
+      "name": "equivalent_reordered",
+      "request": {
+        "idempotency_key": "7ea4803d1bb14ad4b92370bb8a85af43",
+        "currency": "PEN",
+        "postings": [
+          {
+            "account_id": "1FF73504-E5DE-49FB-882A-7FC09F6E06CE",
+            "amount_minor": -10050
+          },
+          {
+            "account_id": "51392d41-edc2-4a4f-8656-0ed36220a874",
+            "amount_minor": 10050
+          }
+        ],
+        "metadata": {
+          "a": {
+            "x": [
+              "c",
+              2,
+              1
+            ],
+            "y": true
+          },
+          "b": "dos"
+        }
+      },
+      "expected_fingerprint": "sha256:aa0290efee0bd963b1fa1f26ec112a8301b1da6660736e9321834c1188e22acf"
+    },
+    {
+      "name": "metadata_changed",
+      "request": {
+        "idempotency_key": "7ea4803d1bb14ad4b92370bb8a85af43",
+        "currency": "PEN",
+        "postings": [
+          {
+            "account_id": "1ff73504-e5de-49fb-882a-7fc09f6e06ce",
+            "amount_minor": -10050
+          },
+          {
+            "account_id": "51392d41-edc2-4a4f-8656-0ed36220a874",
+            "amount_minor": 10050
+          }
+        ],
+        "metadata": {
+          "a": {
+            "x": [
+              "c",
+              2,
+              1
+            ],
+            "y": true
+          },
+          "b": "tres"
+        }
+      },
+      "expected_fingerprint": "sha256:83e359ea5db128e1f55d107661e9d40a0ffad35f5f7a3bc61cb181d7d1bd33bd"
+    }
+  ]
+}

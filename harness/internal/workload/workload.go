@@ -9,12 +9,16 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/rand"
+	"net"
 	"net/http"
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/kapumota/ledger-lab/harness/internal/history"
 )
 
 // Profile es el perfil de contencion.
@@ -45,6 +49,8 @@ type Config struct {
 	Amount       int64
 	DuplicatePct int   // porcentaje de solicitudes reenviadas con la misma clave
 	Seed         int64 // semilla, para que la campana sea reproducible
+	RunID        string
+	History      history.Sink
 }
 
 // Result resume la campana.
@@ -72,12 +78,16 @@ type contadores struct {
 	mu                                                                    sync.Mutex
 	sent, created, dup, rejected, conflicts, unavailable, errs, uncertain int64
 	latencias                                                             []time.Duration
+	historyErr                                                            error
 }
 
 // Run ejecuta la campana.
 func Run(ctx context.Context, cfg Config) (Result, error) {
 	if len(cfg.Accounts) < 2 {
 		return Result{}, fmt.Errorf("workload: se requieren al menos dos cuentas")
+	}
+	if cfg.History != nil && cfg.RunID == "" {
+		return Result{}, fmt.Errorf("workload: run_id es obligatorio al registrar historia")
 	}
 	if cfg.Concurrency <= 0 {
 		cfg.Concurrency = 1
@@ -99,17 +109,23 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 		go func(w int) {
 			defer wg.Done()
 			r := rand.New(rand.NewSource(cfg.Seed + int64(w)))
+			clientID := fmt.Sprintf("client-%03d", w)
+			var clientSeq uint64
 			for ctx.Err() == nil {
 				origen, destino := elegirPar(r, cfg)
 				key := nuevaClave(r)
-				enviar(ctx, cliente, cfg, c, key, origen, destino, false)
+				enviar(ctx, cliente, cfg, c, inicio, clientID, clientSeq,
+					key, origen, destino, false)
+				clientSeq++
 
 				// Duplicación deliberada. El reintento con la misma clave debe
 				// producir el mismo efecto una sola vez (I3). El contrato HTTP no
 				// revela si la solicitud es duplicada, así que el arnés conserva
 				// esa información porque él mismo generó el reintento.
 				if cfg.DuplicatePct > 0 && r.Intn(100) < cfg.DuplicatePct {
-					enviar(ctx, cliente, cfg, c, key, origen, destino, true)
+					enviar(ctx, cliente, cfg, c, inicio, clientID, clientSeq,
+						key, origen, destino, true)
+					clientSeq++
 				}
 			}
 		}(w)
@@ -119,6 +135,9 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.historyErr != nil {
+		return Result{}, c.historyErr
+	}
 	sort.Slice(c.latencias, func(i, j int) bool { return c.latencias[i] < c.latencias[j] })
 
 	res := Result{
@@ -150,49 +169,95 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 }
 
 func enviar(ctx context.Context, cliente *http.Client, cfg Config, c *contadores,
+	runStart time.Time, clientID string, clientSeq uint64,
 	key, origen, destino string, duplicate bool) {
 
-	cuerpo, _ := json.Marshal(map[string]any{
-		"idempotency_key": key,
-		"currency":        cfg.Currency,
-		"postings": []map[string]any{
-			{"account_id": origen, "amount_minor": -cfg.Amount},
-			{"account_id": destino, "amount_minor": cfg.Amount},
+	solicitud := history.Request{
+		IdempotencyKey: key,
+		Currency:       cfg.Currency,
+		Postings: []history.Posting{
+			{AccountID: origen, AmountMinor: -cfg.Amount},
+			{AccountID: destino, AmountMinor: cfg.Amount},
 		},
-	})
+	}
+	fingerprint, err := history.Fingerprint(solicitud)
+	if err != nil {
+		registrarErrorHistoria(c, err)
+		return
+	}
+
+	cuerpo, err := json.Marshal(solicitud)
+	if err != nil {
+		registrarErrorHistoria(c, err)
+		return
+	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		cfg.BaseURL+"/entries", bytes.NewReader(cuerpo))
 	if err != nil {
+		registrarErrorHistoria(c, err)
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
 
+	invokeNS := time.Since(runStart).Nanoseconds()
 	t0 := time.Now()
-	resp, err := cliente.Do(req)
+	resp, requestErr := cliente.Do(req)
 	elapsed := time.Since(t0)
+	completeNS := time.Since(runStart).Nanoseconds()
+
+	record := history.Record{
+		SchemaVersion:      1,
+		RunID:              cfg.RunID,
+		OperationID:        history.OperationID(cfg.RunID, clientID, clientSeq),
+		ClientID:           clientID,
+		ClientSeq:          clientSeq,
+		IdempotencyKey:     key,
+		RequestFingerprint: fingerprint,
+		InvokeNS:           invokeNS,
+		CompleteNS:         completeNS,
+	}
 
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.sent++
+	c.mu.Unlock()
 
-	if err != nil {
-		if ctx.Err() != nil {
-			return
+	if requestErr != nil {
+		record.Result = history.Unknown
+		record.ErrorCode = stringPtr(errorObservacional(ctx, requestErr))
+		if cfg.History != nil {
+			if err := cfg.History.Append(record); err != nil {
+				registrarErrorHistoria(c, err)
+			}
 		}
-		// Sin respuesta. El desenlace es desconocido y solo la reconciliacion
-		// puede resolverlo. Se contabiliza aparte porque es una metrica del
-		// experimento, no un error del arnes.
+
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		// Toda invocación sin respuesta contractual tiene desenlace desconocido,
+		// incluida la cancelación al terminar la ventana de carga. El resumen y
+		// history.ndjson deben contar la misma población observada.
 		c.uncertain++
 		return
 	}
 	defer resp.Body.Close()
 
 	var cuerpoResp struct {
-		Code string `json:"code"`
+		EntryID string `json:"entry_id"`
+		Code    string `json:"code"`
 	}
 	_ = json.NewDecoder(resp.Body).Decode(&cuerpoResp)
 
+	record.Result, record.EntryID, record.ErrorCode = clasificarRespuesta(
+		resp.StatusCode, cuerpoResp.EntryID, cuerpoResp.Code,
+	)
+	if cfg.History != nil {
+		if err := cfg.History.Append(record); err != nil {
+			registrarErrorHistoria(c, err)
+		}
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.latencias = append(c.latencias, elapsed)
 
 	switch resp.StatusCode {
@@ -214,6 +279,50 @@ func enviar(ctx context.Context, cliente *http.Client, cfg Config, c *contadores
 		c.errs++
 	}
 }
+
+func clasificarRespuesta(status int, entryID, code string) (history.Result, *string, *string) {
+	switch status {
+	case http.StatusAccepted:
+		if entryID == "" {
+			return history.Unknown, nil, stringPtr("internal")
+		}
+		return history.Committed, stringPtr(entryID), nil
+	case http.StatusBadRequest, http.StatusConflict, http.StatusUnprocessableEntity,
+		http.StatusServiceUnavailable:
+		if code == "" {
+			return history.Unknown, nil, stringPtr("internal")
+		}
+		return history.Rejected, nil, stringPtr(code)
+	case http.StatusInternalServerError:
+		if code == "" {
+			code = "internal"
+		}
+		return history.Unknown, nil, stringPtr(code)
+	default:
+		return history.Unknown, nil, stringPtr("internal")
+	}
+}
+
+func errorObservacional(ctx context.Context, err error) string {
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
+		return "timeout"
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return "timeout"
+	}
+	return "transport_error"
+}
+
+func registrarErrorHistoria(c *contadores, err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.historyErr == nil {
+		c.historyErr = fmt.Errorf("workload: historia: %w", err)
+	}
+}
+
+func stringPtr(s string) *string { return &s }
 
 func elegirPar(r *rand.Rand, cfg Config) (string, string) {
 	n := len(cfg.Accounts)
